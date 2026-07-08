@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+set -e
+
+REPO="abualhsun/cards-manager"
+BRANCH="init-scaffold"
+
+echo "1/ إنشاء .gitignore و .env.example"
+cat > .gitignore <<'GITIGNORE'
+.env
+__pycache__/
+*.pyc
+backend/.venv/
+node_modules/
+.DS_Store
+GITIGNORE
+
+cat > .env.example <<'ENVEX'
+# Example environment variables (do NOT commit .env)
+SECRET_KEY=CHANGE_THIS_SECRET
+MYSQL_ROOT_PASSWORD=rootpassword
+MYSQL_DATABASE=cardsdb
+MYSQL_USER=appuser
+MYSQL_PASSWORD=apppass
+MEILI_MASTER_KEY=masterKey
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=Password123!
+ENVEX
+
+# إذا أردت: إنشاء ملف .env محلي (تحذير: لا ترفعه إلى Git)
+if [ ! -f .env ]; then
+  cp .env.example .env
+  echo ".env file created from .env.example — قم بتحريره لوضع القيم الحقيقية"
+fi
+
+echo "2/ تعديل docker-compose.yml لاستخدام env_file (سيعمل حتى لو بقيت القيم ثابتة هناك)"
+# ننشئ نسخة docker-compose.env.yml باستخدام المتغيرات عبر env_file
+cat > docker-compose.yml <<'DCOMP'
+version: "3.8"
+services:
+  db:
+    image: mysql:8.0
+    env_file:
+      - .env
+    volumes:
+      - db_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.2
+    environment:
+      MEILI_NO_ANALYTICS: "true"
+    ports:
+      - "7700:7700"
+
+  backend:
+    build: ./backend
+    depends_on:
+      - db
+      - meilisearch
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/app/app
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  db_data:
+DCOMP
+
+echo "3/ تهيئة git و commit"
+git init || true
+git checkout -b $BRANCH || git switch -c $BRANCH
+git add .
+git commit -m "init: scaffold cards-manager" || echo "commit قد فشل (ربما لا توجد تغييرات جديدة)"
+
+echo "4/ إنشاء المستودع على GitHub و push (يتطلب gh CLI ومصادقة)"
+if ! command -v gh >/dev/null 2>&1; then
+  echo "لم أجد gh (GitHub CLI). رُبما تريد تنفيذ الأوامر يدوياً. سأطبع التعليمات بدل التنفيذ."
+  echo "إليك أوامر الإنشاء والدفع:"
+  echo "  gh repo create $REPO --public --confirm"
+  echo "  git remote add origin https://github.com/$REPO.git"
+  echo "  git push -u origin $BRANCH"
+  exit 0
+fi
+
+# إذا كان الريبو موجودًا سيفشل gh create؛ نتعامل مع ذلك
+if gh repo view "$REPO" >/dev/null 2>&1; then
+  echo "Repository $REPO exists — سأربطه كـ remote وندفع"
+  git remote remove origin 2>/dev/null || true
+  git remote add origin "https://github.com/$REPO.git"
+else
+  echo "إنشاء repository $REPO على GitHub"
+  gh repo create "$REPO" --public --confirm
+fi
+
+echo "دفع branch $BRANCH إلى GitHub"
+git push -u origin $BRANCH
+
+echo "5/ تشغيل Docker Compose"
+echo "ستبدأ الحاويات الآن (قد يستغرق عدة دقائق في المرة الأولى):"
+docker compose up --build -d
+
+echo "تم: افتح http://localhost:3000 للواجهة، http://localhost:8000 للـ API، و http://localhost:7700 للـ MeiliSearch"
+echo "حساب الإدارة الافتراضي: admin@example.com / Password123! (غيّر .env قبل الإنتاج)"
